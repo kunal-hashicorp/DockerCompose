@@ -1,0 +1,39 @@
+name: terraform-enterprise
+services:
+  tfe:
+    image: images.releases.hashicorp.com/hashicorp/terraform-enterprise:__TFE_VERSION__
+    environment:
+      TFE_LICENSE: "__TFE_LICENSE__"
+      TFE_HOSTNAME: "__DOMAIN_NAME__"
+      TFE_ENCRYPTION_PASSWORD: "password"
+      TFE_OPERATIONAL_MODE: "disk"
+      TFE_DISK_CACHE_VOLUME_NAME: ${COMPOSE_PROJECT_NAME}_terraform-enterprise-cache
+      TFE_TLS_CERT_FILE: /etc/ssl/private/terraform-enterprise/cert.pem
+      TFE_TLS_KEY_FILE: /etc/ssl/private/terraform-enterprise/key.pem
+      TFE_TLS_CA_BUNDLE_FILE: /etc/ssl/private/terraform-enterprise/bundle.pem
+      TFE_IACT_SUBNETS: 49.36.138.241/32
+    cap_add:
+      - IPC_LOCK
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/log/terraform-enterprise
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /run/docker.sock
+      - type: bind
+        source: ./certs
+        target: /etc/ssl/private/terraform-enterprise
+      - type: bind
+        source: /app
+        target: /var/lib/terraform-enterprise
+      - type: volume
+        source: terraform-enterprise-cache
+        target: /var/cache/tfe-task-worker/terraform
+volumes:
+  terraform-enterprise-cache:
