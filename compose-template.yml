@@ -1,44 +1,54 @@
-stage('Generate compose.yml from template') {
-  steps {
-    script {
-      // Export ALL params into the environment
-      withEnv([
-        "PRIVATE_IP=${params.PRIVATE_IP}",
-        "PUBLIC_IP=${params.PUBLIC_IP}",
-        "RELEASE_VERSION=${params.RELEASE_VERSION}",
-        "DOMAIN_NAME=${params.DOMAIN_NAME}",
-        "DB_USER=${params.DB_USER}",
-        "DB_PASWORD=${params.DB_PASWORD}",
-        "DB_HOST=${params.DB_HOST}",
-        "DB_NAME=${params.DB_NAME}",
-        "S3_REGION=${params.S3_REGION}",
-        "S3_BUCKETNAME=${params.S3_BUCKETNAME}",
-        "TFE_LICENSE=${params.TFE_LICENSE}"
-      ]) {
-        sh '''
-          mkdir -p fdo-test
+name: terraform-enterprise
+services:
+  tfe:
+    image: images.releases.hashicorp.com/hashicorp/terraform-enterprise:__TFE_VERSION__
+    environment:
+      TFE_LICENSE: "__TFE_LICENSE__"
+      TFE_HOSTNAME: "__DOMAIN_NAME__"
+      TFE_ENCRYPTION_PASSWORD: "password"
+      TFE_OPERATIONAL_MODE: "external"
+      TFE_DISK_CACHE_VOLUME_NAME: ${COMPOSE_PROJECT_NAME}_terraform-enterprise-cache
+      TFE_TLS_CERT_FILE: /etc/ssl/private/terraform-enterprise/cert.pem
+      TFE_TLS_KEY_FILE: /etc/ssl/private/terraform-enterprise/key.pem
+      TFE_TLS_CA_BUNDLE_FILE: /etc/ssl/private/terraform-enterprise/bundle.pem
+      TFE_IACT_SUBNETS: 49.36.138.241/32
 
-          # Escape sensitive values before using in sed
-          ESCAPED_DB_PASWORD=$(printf '%s' "$DB_PASWORD" | sed 's/[&/]/\\\\&/g')
+      # Database settings
+      TFE_DATABASE_USER: "__DB_USER__"
+      TFE_DATABASE_PASSWORD: "__DB_PASWORD__"
+      TFE_DATABASE_HOST: "__DB_HOST__"
+      TFE_DATABASE_NAME: "__DB_NAME__"
+      TFE_DATABASE_PARAMETERS: "sslmode=require"
 
-          sed -e "s|__TFE_VERSION__|${RELEASE_VERSION}|g" \
-              -e "s|__TFE_LICENSE__|${TFE_LICENSE}|g" \
-              -e "s|__DOMAIN_NAME__|${DOMAIN_NAME}|g" \
-              -e "s|__DB_USER__|${DB_USER}|g" \
-              -e "s|__DB_PASWORD__|$ESCAPED_DB_PASWORD|g" \
-              -e "s|__DB_HOST__|${DB_HOST}|g" \
-              -e "s|__DB_NAME__|${DB_NAME}|g" \
-              -e "s|__S3_REGION__|${S3_REGION}|g" \
-              -e "s|__S3_BUCKETNAME__|${S3_BUCKETNAME}|g" \
-              compose-template.yml > fdo-test/compose.yml
+      # Object storage settings
+      TFE_OBJECT_STORAGE_TYPE: "s3"
+      TFE_OBJECT_STORAGE_S3_REGION: "__S3_REGION__"
+      TFE_OBJECT_STORAGE_S3_BUCKET: "__S3_BUCKETNAME__"
+      TFE_OBJECT_STORAGE_S3_USE_INSTANCE_PROFILE: "true"
 
-          # Write license to a file for secure transfer
-          echo "${TFE_LICENSE}" > fdo-test/license.txt
+    cap_add:
+      - IPC_LOCK
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/log/terraform-enterprise
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /run/docker.sock
+      - type: bind
+        source: ./certs
+        target: /etc/ssl/private/terraform-enterprise
+      - type: bind
+        source: /app
+        target: /var/lib/terraform-enterprise
+      - type: volume
+        source: terraform-enterprise-cache
+        target: /var/cache/tfe-task-worker/terraform
 
-          echo "[INFO] Generated files with substitutions:"
-          cat fdo-test/compose.yml
-        '''
-      }
-    }
-  }
-}
+volumes:
+  terraform-enterprise-cache:
