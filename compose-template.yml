@@ -1,106 +1,54 @@
-pipeline {
-  agent any
+name: terraform-enterprise
+services:
+  tfe:
+    image: images.releases.hashicorp.com/hashicorp/terraform-enterprise:__TFE_VERSION__
+    environment:
+      TFE_LICENSE: "__TFE_LICENSE__"
+      TFE_HOSTNAME: "__DOMAIN_NAME__"
+      TFE_ENCRYPTION_PASSWORD: "password"
+      TFE_OPERATIONAL_MODE: "external"
+      TFE_DISK_CACHE_VOLUME_NAME: ${COMPOSE_PROJECT_NAME}_terraform-enterprise-cache
+      TFE_TLS_CERT_FILE: /etc/ssl/private/terraform-enterprise/cert.pem
+      TFE_TLS_KEY_FILE: /etc/ssl/private/terraform-enterprise/key.pem
+      TFE_TLS_CA_BUNDLE_FILE: /etc/ssl/private/terraform-enterprise/bundle.pem
+      TFE_IACT_SUBNETS: 49.36.138.241/32
 
-  parameters {
-    string(name: 'PRIVATE_IP', description: 'Private IP of the GCP VM')
-    string(name: 'PUBLIC_IP', description: 'Public IP of the GCP VM')
-    string(name: 'RELEASE_VERSION', description: 'TFE release version')
-    string(name: 'DOMAIN_NAME', description: 'FQDN (e.g. my.domain.com)')
-    string(name: 'DB_USER', description: 'Database Username')
-    string(name: 'DB_PASSWORD', description: 'Database Password')
-    string(name: 'DB_HOST', description: 'Database Hostname')
-    string(name: 'DB_NAME', description: 'Database Name')
-    string(name: 'S3_REGION', description: 'S3 Region')
-    string(name: 'S3_BUCKETNAME', description: 'S3 Name')
-    password(name: 'TFE_LICENSE', description: 'TFE license string')
-  }
+      # Database settings
+      TFE_DATABASE_USER: "__DB_USER__"
+      TFE_DATABASE_PASSWORD: "__DB_PASSWORD__"
+      TFE_DATABASE_HOST: "__DB_HOST__"
+      TFE_DATABASE_NAME: "__DB_NAME__"
+      TFE_DATABASE_PARAMETERS: "sslmode=require"
 
-  environment {
-    SSH_USER = "ubuntu"
-  }
+      # Object storage settings
+      TFE_OBJECT_STORAGE_TYPE: "s3"
+      TFE_OBJECT_STORAGE_S3_REGION: "__S3_REGION__"
+      TFE_OBJECT_STORAGE_S3_BUCKET: "__S3_BUCKETNAME__"
+      TFE_OBJECT_STORAGE_S3_USE_INSTANCE_PROFILE: "true"
 
-  stages {
+    cap_add:
+      - IPC_LOCK
+    read_only: true
+    tmpfs:
+      - /tmp
+      - /run
+      - /var/log/terraform-enterprise
+    ports:
+      - "80:80"
+      - "443:443"
+    volumes:
+      - type: bind
+        source: /var/run/docker.sock
+        target: /run/docker.sock
+      - type: bind
+        source: ./certs
+        target: /etc/ssl/private/terraform-enterprise
+      - type: bind
+        source: /app
+        target: /var/lib/terraform-enterprise
+      - type: volume
+        source: terraform-enterprise-cache
+        target: /var/cache/tfe-task-worker/terraform
 
-    stage('Clone Compose Template') {
-      steps {
-        git branch: 'feature/AWS_DockerES', url: 'https://github.com/kunal-hashicorp/DockerCompose.git'
-      }
-    }
-
-    stage('Generate compose.yml from template') {
-      steps {
-        script {
-          // Escape special characters in DB_PASWORD for sed
-          def escapedDbPassword = params.DB_PASSWORD.replaceAll(/([\/&])/,'\\\\$1')
-    
-          sh """
-            mkdir -p fdo-test
-            sed -e "s|__TFE_VERSION__|${params.RELEASE_VERSION}|g" \
-                -e "s|__TFE_LICENSE__|${params.TFE_LICENSE}|g" \
-                -e "s|__DOMAIN_NAME__|${params.DOMAIN_NAME}|g" \
-                -e "s|__DB_USER__|${params.DB_USER}|g" \
-                -e "s|__DB_PASSWORD__|${escapedDbPassword}|g" \
-                -e "s|__DB_HOST__|${params.DB_HOST}|g" \
-                -e "s|__DB_NAME__|${params.DB_NAME}|g" \
-                -e "s|__S3_REGION__|${params.S3_REGION}|g" \
-                -e "s|__S3_BUCKETNAME__|${params.S3_BUCKETNAME}|g" \
-                compose-template.yml > fdo-test/compose.yml
-    
-            echo "${params.TFE_LICENSE}" > fdo-test/license.txt
-    
-            echo "[INFO] Generated files:"
-            cat fdo-test/compose.yml
-          """
-        }
-      }
-    }
-
-    stage('Upload files to VM') {
-      steps {
-        sshagent(['gcp-ssh-key']) {
-          sh """
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${SSH_USER}@${params.PUBLIC_IP} "mkdir -p ~/fdo-test"
-            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null fdo-test/compose.yml ${SSH_USER}@${params.PUBLIC_IP}:~/fdo-test/compose.yml
-            scp -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null fdo-test/license.txt ${SSH_USER}@${params.PUBLIC_IP}:~/fdo-test/license.txt
-          """
-        }
-      }
-    }
-
-    stage('Install TFE') {
-      steps {
-        sshagent(['gcp-ssh-key']) {
-          sh """
-            ssh -o StrictHostKeyChecking=no -o UserKnownHostsFile=/dev/null ${SSH_USER}@${params.PUBLIC_IP} '
-              set -euo pipefail
-
-              DOMAIN_CLEAN="${params.DOMAIN_NAME}"
-              DOMAIN_CLEAN="\${DOMAIN_CLEAN%.}"
-
-              echo "[INFO] Creating certs directory and preparing compose environment..."
-              mkdir -p ~/fdo-test/certs
-              cd ~/fdo-test
-
-              echo "[INFO] Copying TLS certificates..."
-              sudo cp -p /etc/letsencrypt/live/\$DOMAIN_CLEAN/fullchain.pem certs/cert.pem
-              sudo cp -p /etc/letsencrypt/live/\$DOMAIN_CLEAN/privkey.pem certs/key.pem
-              cp certs/cert.pem certs/bundle.pem
-
-              echo "[INFO] Logging into Docker registry using license.txt..."
-              cat license.txt | sudo docker login --username terraform --password-stdin images.releases.hashicorp.com
-
-              echo "[INFO] Pulling Terraform Enterprise image..."
-              sudo docker pull images.releases.hashicorp.com/hashicorp/terraform-enterprise:${params.RELEASE_VERSION}
-
-              echo "[INFO] Ensuring mount directory exists..."
-              sudo mkdir -p /app
-
-              echo "[INFO] Starting Docker Compose..."
-              sudo docker-compose up -d
-            '
-          """
-        }
-      }
-    }
-  }
-}
+volumes:
+  terraform-enterprise-cache:
