@@ -22,9 +22,9 @@ services:
 
       # Object storage settings
       TFE_OBJECT_STORAGE_TYPE: "azure"
-      TFE_OBJECT_STORAGE_S3_REGION: "__BlobStorage_REGION__"
-      TFE_AZURE_STORAGE_ACCOUNT_NAME: "__BlobStorage_Name__"
-      TFE_OBJECT_STORAGE_S3_USE_INSTANCE_PROFILE: "true"
+      TFE_AZURE_OBJECT_STORAGE_ACCOUNT_KEY: "__BlobStorage_KEY__"
+      TFE_AZURE_OBJECT_STORAGE_ACCOUNT_NAME: "__BlobStorage_Name__"
+      TFE_AZURE_OBJECT_STORAGE_CONTAINER: "__BlobStorage_Container__"
 
     cap_add:
       - IPC_LOCK
